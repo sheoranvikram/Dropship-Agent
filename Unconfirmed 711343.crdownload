@@ -1,0 +1,105 @@
+"""
+integrations/indiamart.py - Search home decor products on IndiaMart
+Uses IndiaMart's search page scraping (no official public API available)
+"""
+
+import requests
+from bs4 import BeautifulSoup
+import re
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-IN,en;q=0.9",
+}
+
+
+def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
+    """
+    Search IndiaMart for home decor products.
+    Returns list of raw product dicts.
+    """
+    query = keyword.replace(" ", "+")
+    url = f"https://dir.indiamart.com/search.mp?ss={query}&pricemin=100&pricemax={int(max_price)}"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        products = []
+        cards = soup.select("div.card-body, div.producttitle, div.prd-card")
+
+        # Fallback: try JSON-LD or product listing blocks
+        listing_blocks = soup.find_all("div", class_=re.compile(r"prd|product|card", re.I))
+
+        for block in listing_blocks[:limit * 2]:
+            title_el = block.find(["h2", "h3", "a"], class_=re.compile(r"title|name|prd", re.I))
+            price_el = block.find(class_=re.compile(r"price|prc|cost", re.I))
+            link_el = block.find("a", href=True)
+            img_el = block.find("img")
+
+            if not title_el:
+                continue
+
+            title = title_el.get_text(strip=True)
+            if len(title) < 5:
+                continue
+
+            # Parse price
+            price_text = price_el.get_text(strip=True) if price_el else "500"
+            price_match = re.search(r"[\d,]+", price_text.replace(",", ""))
+            price = float(price_match.group().replace(",", "")) if price_match else 500.0
+
+            if price > max_price:
+                continue
+
+            link = link_el["href"] if link_el else ""
+            if link and not link.startswith("http"):
+                link = "https://www.indiamart.com" + link
+
+            image = ""
+            if img_el:
+                image = img_el.get("data-src") or img_el.get("src", "")
+
+            products.append({
+                "title": title,
+                "supplier": "IndiaMart",
+                "supplier_url": link,
+                "supplier_price": price,
+                "images": [image] if image else [],
+                "rating": 4.2,
+                "orders": 0,
+                "item_id": link
+            })
+
+            if len(products) >= limit:
+                break
+
+        print(f"    [IndiaMart] Found {len(products)} products for '{keyword}'")
+        return products
+
+    except Exception as e:
+        print(f"    [IndiaMart] Error searching '{keyword}': {e}")
+        return []
+
+
+def check_availability(supplier_url: str) -> dict:
+    """
+    Check if a product is still available on IndiaMart.
+    Returns dict with 'available' bool and 'in_stock' bool.
+    """
+    try:
+        response = requests.get(supplier_url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Check for "out of stock" or removed page indicators
+        page_text = soup.get_text().lower()
+        if "page not found" in page_text or "product not available" in page_text:
+            return {"available": False, "in_stock": False}
+
+        out_of_stock = "out of stock" in page_text or "not available" in page_text
+        return {"available": True, "in_stock": not out_of_stock}
+
+    except Exception:
+        return {"available": False, "in_stock": False}
