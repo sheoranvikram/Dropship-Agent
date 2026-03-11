@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 import database
 from integrations.shopify import list_product, get_product_url
-from email.sender import send_order_email
+from mailer.sender import send_order_email
 from config import SHOPIFY_WEBHOOK_SECRET
 
 app = FastAPI(title="Dropship AI Agent")
