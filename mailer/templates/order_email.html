@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>New Order Received</title>
+<style>
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px;color:#333}
+  .container{max-width:600px;margin:0 auto}
+  .header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:white;padding:26px;border-radius:14px 14px 0 0;text-align:center}
+  .header h1{margin:0;font-size:20px}
+  .header p{margin:6px 0 0;opacity:.8;font-size:13px}
+  .body{background:white;padding:24px;border-radius:0 0 14px 14px}
+  .section{margin-bottom:20px}
+  .section h3{margin:0 0 10px;font-size:14px;color:#ff6b35;text-transform:uppercase;letter-spacing:.5px}
+  .field{display:flex;gap:12px;margin-bottom:8px;font-size:14px}
+  .field-label{color:#888;min-width:130px;font-weight:600}
+  .field-value{color:#333}
+  .note-box{background:#fff8f5;border:1px solid #ffe0d0;border-radius:8px;padding:14px;font-size:13px;color:#555;font-style:italic}
+  .products-table{width:100%;border-collapse:collapse;font-size:13px}
+  .products-table th{background:#f9f9f9;padding:8px 10px;text-align:left;border-bottom:2px solid #eee;color:#888}
+  .products-table td{padding:8px 10px;border-bottom:1px solid #f0f0f0}
+  .total-row td{font-weight:700;color:#ff6b35;font-size:15px}
+  .action-note{background:#e8f5e9;border:1px solid #c8e6c9;border-radius:8px;padding:14px;font-size:13px;color:#2e7d32;margin-top:16px}
+  .footer{text-align:center;padding:16px;color:#bbb;font-size:11px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🛍️ New Order Received!</h1>
+    <p>Order #{{order_number}} · {{order_date}}</p>
+  </div>
+  <div class="body">
+
+    <div class="section">
+      <h3>👤 Customer Details</h3>
+      <div class="field"><span class="field-label">Name</span><span class="field-value">{{customer_name}}</span></div>
+      <div class="field"><span class="field-label">Email</span><span class="field-value">{{customer_email}}</span></div>
+      <div class="field"><span class="field-label">Phone</span><span class="field-value">{{customer_phone}}</span></div>
+    </div>
+
+    <div class="section">
+      <h3>📦 Shipping Address</h3>
+      <div class="field"><span class="field-label">Address</span><span class="field-value">{{shipping_address}}</span></div>
+      <div class="field"><span class="field-label">City</span><span class="field-value">{{shipping_city}}</span></div>
+      <div class="field"><span class="field-label">State</span><span class="field-value">{{shipping_state}}</span></div>
+      <div class="field"><span class="field-label">PIN Code</span><span class="field-value">{{shipping_zip}}</span></div>
+    </div>
+
+    <div class="section">
+      <h3>🛒 Order Items</h3>
+      <table class="products-table">
+        <tr><th>Product</th><th>Qty</th><th>Price</th></tr>
+        {{order_items}}
+        <tr class="total-row"><td colspan="2">Total</td><td>{{order_total}}</td></tr>
+      </table>
+    </div>
+
+    {{customer_note_section}}
+
+    <div class="action-note">
+      <strong>⚡ Action Required:</strong> Please place this order manually with the supplier.
+      Use the customer details above when filling the supplier's order form.
+      Ship directly to the customer's address.
+    </div>
+  </div>
+  <div class="footer">Dropship AI Agent · Your Shopify Store</div>
+</div>
+</body>
+</html>
