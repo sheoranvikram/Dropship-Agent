@@ -15,7 +15,7 @@ from datetime import datetime
 import database
 from agent.searcher import search_all_platforms
 from agent.stock_checker import check_all_listed_products, remove_expired_products
-from email.sender import send_approval_email
+from mailer.sender import send_approval_email
 from integrations.shopify import register_order_webhook
 from config import SCHEDULE_HOUR, SERVER_BASE_URL
 
