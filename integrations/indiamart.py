@@ -37,58 +37,80 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # DEBUG: print a slice of the HTML so we can see the real structure
-        print(f"    [IndiaMart DEBUG] Page length: {len(response.text)} | Sample: {response.text[500:2500]}")
+        # DEBUG: print all unique div class names so we can find the right ones
+        all_divs = soup.find_all("div", class_=True)
+        class_names = set()
+        for d in all_divs:
+            for c in d.get("class", []):
+                class_names.add(c)
+        print(f"    [IndiaMart DEBUG] Total divs: {len(all_divs)} | Unique classes (sample): {list(class_names)[:40]}")
 
         products = []
 
-        # IndiaMart product card selectors
-        blocks = (
-            soup.find_all("div", class_=re.compile(r"prd-card|product-card|listing-card", re.I))
-            or soup.find_all("div", class_=re.compile(r"prd|product|listing|card", re.I))
-            or soup.find_all("li", class_=re.compile(r"prd|product|item", re.I))
-        )
+        # Strategy 1: look for divs that contain an imimg.com image (product images)
+        # We know from previous debug that product images are hosted on 5.imimg.com
+        all_links = soup.find_all("a", href=re.compile(r"indiamart\.com", re.I))
+        print(f"    [IndiaMart DEBUG] Total IndiaMart links found: {len(all_links)}")
 
-        for block in blocks[:limit * 3]:
-            title_el = (
-                block.find(["h2", "h3", "a"], class_=re.compile(r"title|name|prd|heading", re.I))
-                or block.find("a", href=re.compile(r"indiamart\.com", re.I))
-            )
-            price_el = block.find(class_=re.compile(r"price|prc|cost|rupee", re.I))
-            link_el = block.find("a", href=True)
-            img_el = block.find("img")
+        seen = set()
+        for link_el in all_links:
+            href = link_el.get("href", "")
+            # Skip navigation/footer links - product links usually have long paths
+            if len(href) < 30:
+                continue
+            if href in seen:
+                continue
+            seen.add(href)
 
-            if not title_el:
+            # Get title from link text or nearby heading
+            title = link_el.get_text(strip=True)
+            if not title or len(title) < 5:
+                # Try parent
+                parent = link_el.parent
+                if parent:
+                    title = parent.get_text(strip=True)[:100]
+
+            if not title or len(title) < 5:
                 continue
 
-            title = title_el.get_text(strip=True)
-            if len(title) < 5:
-                continue
-
-            price_text = price_el.get_text(strip=True) if price_el else "500"
-            digits = re.sub(r"[^\d]", "", price_text.split("-")[0])
-            price = float(digits) if digits else 500.0
+            # Try to find price near this link
+            parent = link_el.parent
+            price = 500.0
+            for _ in range(4):  # walk up 4 levels
+                if parent is None:
+                    break
+                price_el = parent.find(string=re.compile(r"₹|Rs\.?|INR", re.I))
+                if price_el:
+                    digits = re.sub(r"[^\d]", "", str(price_el).split("-")[0])
+                    if digits:
+                        price = float(digits[:6])  # cap to avoid parsing huge numbers
+                    break
+                parent = parent.parent
 
             if price > max_price:
                 continue
 
-            link = link_el["href"] if link_el else ""
-            if link and not link.startswith("http"):
-                link = "https://www.indiamart.com" + link
-
+            # Try to find image near this link
             image = ""
-            if img_el:
-                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
+            parent = link_el.parent
+            for _ in range(4):
+                if parent is None:
+                    break
+                img_el = parent.find("img")
+                if img_el:
+                    image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
+                    break
+                parent = parent.parent
 
             products.append({
-                "title": title,
+                "title": title[:150],
                 "supplier": "IndiaMart",
-                "supplier_url": link,
+                "supplier_url": href,
                 "supplier_price": price,
                 "images": [image] if image else [],
                 "rating": 4.2,
                 "orders": 0,
-                "item_id": link,
+                "item_id": href,
             })
 
             if len(products) >= limit:
