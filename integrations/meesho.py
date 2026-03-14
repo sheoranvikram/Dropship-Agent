@@ -1,35 +1,28 @@
 """
 integrations/meesho.py - Search home decor products on Meesho
-Uses improved session handling to avoid blocks
+Uses ScraperAPI to handle JS rendering and anti-bot protection
 """
 
 import requests
 from bs4 import BeautifulSoup
 import re
-import random
-import time
+import os
 import json
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-]
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
-def get_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-    })
-    return session
+
+def scrape_url(url: str) -> requests.Response:
+    """Fetch any URL through ScraperAPI with JS rendering enabled."""
+    api_url = "http://api.scraperapi.com"
+    params = {
+        "api_key": SCRAPERAPI_KEY,
+        "url": url,
+        "render": "true",
+        "country_code": "in",
+        "device_type": "desktop",
+    }
+    return requests.get(api_url, params=params, timeout=60)
 
 
 def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
@@ -37,23 +30,17 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
     Search Meesho for home decor products.
     Returns list of raw product dicts.
     """
-    session = get_session()
+    url = f"https://www.meesho.com/search?q={keyword.replace(' ', '%20')}"
 
     try:
-        # Visit homepage first to get cookies
-        session.get("https://www.meesho.com/", timeout=10)
-        time.sleep(random.uniform(1.0, 2.5))
-
-        search_url = f"https://www.meesho.com/search?q={keyword.replace(' ', '%20')}"
-        response = session.get(search_url, timeout=20)
+        response = scrape_url(url)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Try to find JSON data embedded in page (Next.js pattern)
+        # Try Next.js embedded JSON data first
         script_tags = soup.find_all("script", id="__NEXT_DATA__")
         if script_tags:
             try:
                 data = json.loads(script_tags[0].string)
-                # Navigate the Next.js data structure
                 props = data.get("props", {}).get("pageProps", {})
                 items = (
                     props.get("catalogListingResult", {}).get("products", [])
@@ -76,13 +63,15 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
                         for img in (images if isinstance(images, list) else [])
                         if isinstance(img, dict)
                     ]
+                    rating_raw = item.get("rating", 4.0)
+                    rating = float(rating_raw.get("average", 4.0) if isinstance(rating_raw, dict) else rating_raw or 4.0)
                     products.append({
                         "title": item.get("name", item.get("title", "")),
                         "supplier": "Meesho",
                         "supplier_url": f"https://www.meesho.com/p/{item.get('slug', item.get('id', ''))}",
                         "supplier_price": price,
                         "images": image_urls[:3],
-                        "rating": float(item.get("rating", {}).get("average", 4.0) if isinstance(item.get("rating"), dict) else item.get("rating", 4.0) or 4.0),
+                        "rating": rating,
                         "orders": item.get("orders_count", 0),
                         "item_id": str(item.get("id", "")),
                     })
@@ -154,8 +143,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
 def check_availability(supplier_url: str) -> dict:
     try:
-        session = get_session()
-        response = session.get(supplier_url, headers=session.headers, timeout=10)
+        response = scrape_url(supplier_url)
         page_text = response.text.lower()
         if "page not found" in page_text or "404" in page_text:
             return {"available": False, "in_stock": False}
