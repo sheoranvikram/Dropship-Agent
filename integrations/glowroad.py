@@ -1,17 +1,35 @@
 """
 integrations/glowroad.py - Search home decor products on GlowRoad
-GlowRoad is an Indian dropshipping/reseller platform
+Uses improved session + headers to avoid 403 blocks
 """
 
 import requests
 from bs4 import BeautifulSoup
 import re
+import random
+import time
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-IN,en;q=0.9",
-}
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+]
+
+def get_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Referer": "https://glowroad.com/",
+    })
+    return session
 
 
 def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
@@ -19,19 +37,33 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
     Search GlowRoad for home decor products.
     Returns list of raw product dicts.
     """
-    url = f"https://glowroad.com/search?q={keyword.replace(' ', '+')}"
+    session = get_session()
 
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        # Visit homepage first to get cookies
+        session.get("https://glowroad.com/", timeout=10)
+        time.sleep(random.uniform(1.0, 2.0))
+
+        url = f"https://glowroad.com/search?q={keyword.replace(' ', '+')}"
+        response = session.get(url, timeout=20)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         products = []
-        cards = soup.find_all("div", class_=re.compile(r"product|card|item|listing", re.I))
 
-        for card in cards[:limit * 2]:
-            title_el = card.find(["h2", "h3", "a", "span"], class_=re.compile(r"title|name|product", re.I))
-            price_el = card.find(class_=re.compile(r"price|prc|cost|selling", re.I))
+        # Try multiple selector strategies
+        cards = (
+            soup.find_all("div", class_=re.compile(r"product.?card|product.?item|catalog.?item", re.I))
+            or soup.find_all("div", attrs={"data-product-id": True})
+            or soup.find_all("div", class_=re.compile(r"product|card|item|listing", re.I))
+        )
+
+        for card in cards[:limit * 3]:
+            title_el = card.find(
+                ["h2", "h3", "a", "span", "p"],
+                class_=re.compile(r"title|name|product.?name", re.I)
+            )
+            price_el = card.find(class_=re.compile(r"price|prc|cost|selling|sell.?price", re.I))
             link_el = card.find("a", href=True)
             img_el = card.find("img")
 
@@ -43,8 +75,8 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
                 continue
 
             price_text = price_el.get_text(strip=True) if price_el else "450"
-            price_match = re.search(r"[\d,]+", price_text.replace(",", ""))
-            price = float(price_match.group().replace(",", "")) if price_match else 450.0
+            digits = re.sub(r"[^\d]", "", price_text.split("-")[0])
+            price = float(digits) if digits else 450.0
 
             if price > max_price:
                 continue
@@ -55,7 +87,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
             image = ""
             if img_el:
-                image = img_el.get("data-src") or img_el.get("src", "")
+                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
 
             products.append({
                 "title": title,
@@ -65,7 +97,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
                 "images": [image] if image else [],
                 "rating": 4.3,
                 "orders": 0,
-                "item_id": link
+                "item_id": link,
             })
 
             if len(products) >= limit:
@@ -80,9 +112,9 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
 
 def check_availability(supplier_url: str) -> dict:
-    """Check if a GlowRoad product is still available."""
     try:
-        response = requests.get(supplier_url, headers=HEADERS, timeout=10)
+        session = get_session()
+        response = session.get(supplier_url, timeout=10)
         page_text = response.text.lower()
         if "page not found" in page_text or "404" in page_text:
             return {"available": False, "in_stock": False}
