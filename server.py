@@ -7,7 +7,7 @@ Run: uvicorn server:app --host 0.0.0.0 --port 8000
 
 import hmac, hashlib, json
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import database
 from integrations.shopify import list_product, get_product_url
 from mailer.sender import send_order_email
@@ -111,14 +111,12 @@ async def edit_submit(product_id: str, title: str = Form(...), price: float = Fo
     if not product:
         return page("Not Found", "Product not found.", "#ef4444", "❌")
 
-    # Save edits
     database.update_product(product_id, {
         "title": title,
         "suggested_price": price,
         "description": description
     })
 
-    # Fetch updated and list
     updated = database.get_product(product_id)
     shopify_id = list_product(updated)
     if shopify_id:
@@ -135,7 +133,6 @@ async def edit_submit(product_id: str, title: str = Form(...), price: float = Fo
 async def order_webhook(request: Request):
     body = await request.body()
 
-    # Verify Shopify HMAC signature
     shopify_hmac = request.headers.get("X-Shopify-Hmac-Sha256", "")
     if SHOPIFY_WEBHOOK_SECRET and SHOPIFY_WEBHOOK_SECRET != "your_webhook_secret":
         digest = hmac.new(SHOPIFY_WEBHOOK_SECRET.encode(), body, hashlib.sha256).digest()
@@ -159,3 +156,44 @@ async def order_webhook(request: Request):
 async def status():
     pending = database.get_pending_products()
     return {"status": "running", "pending_approvals": len(pending)}
+
+
+# ─── TEST SEARCH (debug endpoint) ────────────────────────────
+@app.get("/test-search", response_class=HTMLResponse)
+async def test_search():
+    """Test the IndiaMart scraper and show results in browser."""
+    import traceback
+    from integrations.indiamart import search_products as search_indiamart
+
+    results_html = ""
+    try:
+        products = search_indiamart("wall clock", max_price=2000, limit=5)
+        if products:
+            cards = ""
+            for p in products:
+                img = p["images"][0] if p.get("images") else ""
+                img_tag = f'<img src="{img}" style="width:100%;height:160px;object-fit:cover;border-radius:8px;margin-bottom:8px"/>' if img else ""
+                cards += f"""
+                <div style="background:white;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.1)">
+                    {img_tag}
+                    <strong style="font-size:14px">{p['title'][:80]}</strong><br/>
+                    <span style="color:#22c55e;font-weight:bold">₹{p['supplier_price']}</span><br/>
+                    <a href="{p['supplier_url']}" target="_blank" style="font-size:12px;color:#6366f1">View on IndiaMart →</a>
+                </div>"""
+            results_html = f"""
+            <h2 style="color:#22c55e">✅ Found {len(products)} products!</h2>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-top:16px">
+                {cards}
+            </div>"""
+        else:
+            results_html = "<h2 style='color:#ef4444'>❌ No products found. Scraper still not working.</h2>"
+    except Exception as e:
+        tb = traceback.format_exc()
+        results_html = f"<h2 style='color:#ef4444'>💥 Error: {e}</h2><pre style='background:#fee;padding:16px;border-radius:8px;font-size:12px;overflow-x:auto'>{tb}</pre>"
+
+    return f"""<html><head><title>Test Search</title></head>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;padding:32px;max-width:1000px;margin:0 auto">
+        <h1>🔍 IndiaMart Scraper Test</h1>
+        <p style="color:#888">Searching for "wall clock" on IndiaMart via ScraperAPI...</p>
+        {results_html}
+    </body></html>"""
