@@ -12,7 +12,6 @@ SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
 
 def scrape_url(url: str) -> requests.Response:
-    """Fetch any URL through ScraperAPI with JS rendering enabled."""
     api_url = "http://api.scraperapi.com"
     params = {
         "api_key": SCRAPERAPI_KEY,
@@ -25,10 +24,6 @@ def scrape_url(url: str) -> requests.Response:
 
 
 def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
-    """
-    Search IndiaMart for home decor products.
-    Returns list of raw product dicts.
-    """
     query = keyword.replace(" ", "+")
     url = f"https://dir.indiamart.com/search.mp?ss={query}&pricemin=100&pricemax={int(max_price)}"
 
@@ -37,70 +32,68 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # DEBUG: print all unique div class names so we can find the right ones
-        all_divs = soup.find_all("div", class_=True)
-        class_names = set()
-        for d in all_divs:
-            for c in d.get("class", []):
-                class_names.add(c)
-        print(f"    [IndiaMart DEBUG] Total divs: {len(all_divs)} | Unique classes (sample): {list(class_names)[:40]}")
-
         products = []
+        seen_urls = set()
 
-        # Strategy 1: look for divs that contain an imimg.com image (product images)
-        # We know from previous debug that product images are hosted on 5.imimg.com
-        all_links = soup.find_all("a", href=re.compile(r"indiamart\.com", re.I))
-        print(f"    [IndiaMart DEBUG] Total IndiaMart links found: {len(all_links)}")
+        # IndiaMart product URLs follow pattern: /proddetail/ or /trade/
+        product_links = soup.find_all("a", href=re.compile(
+            r"(indiamart\.com/(proddetail|trade|catalog)|dir\.indiamart\.com/)",
+            re.I
+        ))
 
-        seen = set()
-        for link_el in all_links:
+        print(f"    [IndiaMart DEBUG] Found {len(product_links)} product-pattern links")
+
+        for link_el in product_links:
             href = link_el.get("href", "")
-            # Skip navigation/footer links - product links usually have long paths
-            if len(href) < 30:
+            if not href or href in seen_urls:
                 continue
-            if href in seen:
-                continue
-            seen.add(href)
+            if not href.startswith("http"):
+                href = "https://www.indiamart.com" + href
+            seen_urls.add(href)
 
-            # Get title from link text or nearby heading
-            title = link_el.get_text(strip=True)
+            # Walk up the DOM to find the product card container
+            container = link_el
+            for _ in range(6):
+                if container.parent:
+                    container = container.parent
+                else:
+                    break
+
+            # Get title - prefer h2/h3/h4, fallback to link text
+            title = ""
+            for tag in ["h2", "h3", "h4", "h5"]:
+                el = container.find(tag)
+                if el:
+                    title = el.get_text(strip=True)
+                    break
+            if not title:
+                title = link_el.get_text(strip=True)
             if not title or len(title) < 5:
-                # Try parent
-                parent = link_el.parent
-                if parent:
-                    title = parent.get_text(strip=True)[:100]
-
-            if not title or len(title) < 5:
                 continue
 
-            # Try to find price near this link
-            parent = link_el.parent
+            # Get price - look for rupee symbol or "Rs" anywhere in container
             price = 500.0
-            for _ in range(4):  # walk up 4 levels
-                if parent is None:
-                    break
-                price_el = parent.find(string=re.compile(r"₹|Rs\.?|INR", re.I))
-                if price_el:
-                    digits = re.sub(r"[^\d]", "", str(price_el).split("-")[0])
-                    if digits:
-                        price = float(digits[:6])  # cap to avoid parsing huge numbers
-                    break
-                parent = parent.parent
-
+            price_text = container.get_text()
+            # Match patterns like ₹ 250, Rs. 300, INR 400
+            price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([\d,]+)", price_text)
+            if price_match:
+                price = float(price_match.group(1).replace(",", ""))
             if price > max_price:
                 continue
 
-            # Try to find image near this link
+            # Get image
             image = ""
-            parent = link_el.parent
-            for _ in range(4):
-                if parent is None:
-                    break
-                img_el = parent.find("img")
-                if img_el:
-                    image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
-                    break
-                parent = parent.parent
+            img_el = container.find("img")
+            if img_el:
+                image = (
+                    img_el.get("data-src")
+                    or img_el.get("data-original")
+                    or img_el.get("data-lazy-src")
+                    or img_el.get("src", "")
+                )
+                # Skip placeholder/base64 images
+                if image.startswith("data:"):
+                    image = ""
 
             products.append({
                 "title": title[:150],
