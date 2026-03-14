@@ -36,8 +36,9 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response = scrape_url(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        print(f"    [IndiaMart DEBUG] Page length: {len(response.text)} | First 500 chars: {response.text[:500]}")
-
+       with open("/tmp/indiamart_debug.html", "w") as f:
+    f.write(response.text)
+print(f"    [IndiaMart DEBUG] Page length: {len(response.text)} | Sample: {response.text[500:2000]}")
         products = []
 
         # IndiaMart product card selectors
