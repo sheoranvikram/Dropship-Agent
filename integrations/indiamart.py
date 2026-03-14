@@ -17,8 +17,8 @@ def scrape_url(url: str) -> requests.Response:
     params = {
         "api_key": SCRAPERAPI_KEY,
         "url": url,
-        "render": "true",          # Execute JavaScript
-        "country_code": "in",      # Indian IP address
+        "render": "true",
+        "country_code": "in",
         "device_type": "desktop",
     }
     return requests.get(api_url, params=params, timeout=60)
@@ -36,9 +36,10 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response = scrape_url(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-       with open("/tmp/indiamart_debug.html", "w") as f:
-    f.write(response.text)
-print(f"    [IndiaMart DEBUG] Page length: {len(response.text)} | Sample: {response.text[500:2000]}")
+
+        # DEBUG: print a slice of the HTML so we can see the real structure
+        print(f"    [IndiaMart DEBUG] Page length: {len(response.text)} | Sample: {response.text[500:2500]}")
+
         products = []
 
         # IndiaMart product card selectors
