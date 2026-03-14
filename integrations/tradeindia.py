@@ -1,35 +1,27 @@
 """
 integrations/tradeindia.py - Search home decor products on TradeIndia
-Uses improved session handling to avoid blocks
+Uses ScraperAPI to handle JS rendering and anti-bot protection
 """
 
 import requests
 from bs4 import BeautifulSoup
 import re
-import random
-import time
+import os
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-]
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
-def get_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Referer": "https://www.tradeindia.com/",
-    })
-    return session
+
+def scrape_url(url: str) -> requests.Response:
+    """Fetch any URL through ScraperAPI with JS rendering enabled."""
+    api_url = "http://api.scraperapi.com"
+    params = {
+        "api_key": SCRAPERAPI_KEY,
+        "url": url,
+        "render": "true",
+        "country_code": "in",
+        "device_type": "desktop",
+    }
+    return requests.get(api_url, params=params, timeout=60)
 
 
 def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
@@ -37,22 +29,16 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
     Search TradeIndia for home decor products.
     Returns list of raw product dicts.
     """
-    session = get_session()
+    query = keyword.replace(" ", "+")
+    url = f"https://www.tradeindia.com/search.html?query={query}"
 
     try:
-        # Visit homepage first to get cookies
-        session.get("https://www.tradeindia.com/", timeout=10)
-        time.sleep(random.uniform(1.0, 2.5))
-
-        query = keyword.replace(" ", "+")
-        url = f"https://www.tradeindia.com/search.html?query={query}"
-        response = session.get(url, timeout=20)
+        response = scrape_url(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         products = []
 
-        # TradeIndia product listing selectors
         blocks = (
             soup.find_all("div", class_=re.compile(r"product.?box|product.?card|listing.?item", re.I))
             or soup.find_all("li", class_=re.compile(r"product|listing|item", re.I))
@@ -115,8 +101,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
 def check_availability(supplier_url: str) -> dict:
     try:
-        session = get_session()
-        response = session.get(supplier_url, timeout=10)
+        response = scrape_url(supplier_url)
         soup = BeautifulSoup(response.text, "html.parser")
         page_text = soup.get_text().lower()
         if "page not found" in page_text or "not available" in page_text:
