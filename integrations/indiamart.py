@@ -1,17 +1,36 @@
 """
 integrations/indiamart.py - Search home decor products on IndiaMart
-Uses IndiaMart's search page scraping (no official public API available)
+Uses IndiaMart's directory search with improved anti-block headers
 """
 
 import requests
 from bs4 import BeautifulSoup
 import re
+import random
+import time
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-IN,en;q=0.9",
-}
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+]
+
+def get_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Cache-Control": "max-age=0",
+    })
+    return session
 
 
 def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
@@ -20,22 +39,35 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
     Returns list of raw product dicts.
     """
     query = keyword.replace(" ", "+")
+    # Use dir.indiamart.com - more scraper-friendly than export.indiamart.com
     url = f"https://dir.indiamart.com/search.mp?ss={query}&pricemin=100&pricemax={int(max_price)}"
 
+    session = get_session()
+
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        # First visit homepage to get cookies (mimics real browser)
+        session.get("https://dir.indiamart.com/", timeout=10)
+        time.sleep(random.uniform(1.0, 2.5))
+
+        response = session.get(url, timeout=20)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         products = []
-        cards = soup.select("div.card-body, div.producttitle, div.prd-card")
 
-        # Fallback: try JSON-LD or product listing blocks
-        listing_blocks = soup.find_all("div", class_=re.compile(r"prd|product|card", re.I))
+        # IndiaMart product cards
+        listing_blocks = soup.find_all("div", class_=re.compile(r"prd|product|listing|card", re.I))
 
-        for block in listing_blocks[:limit * 2]:
-            title_el = block.find(["h2", "h3", "a"], class_=re.compile(r"title|name|prd", re.I))
-            price_el = block.find(class_=re.compile(r"price|prc|cost", re.I))
+        if not listing_blocks:
+            # Try alternate selectors
+            listing_blocks = soup.find_all("li", class_=re.compile(r"prd|product|item", re.I))
+
+        for block in listing_blocks[:limit * 3]:
+            title_el = (
+                block.find(["h2", "h3", "a"], class_=re.compile(r"title|name|prd|heading", re.I))
+                or block.find("a", href=re.compile(r"indiamart\.com", re.I))
+            )
+            price_el = block.find(class_=re.compile(r"price|prc|cost|rupee", re.I))
             link_el = block.find("a", href=True)
             img_el = block.find("img")
 
@@ -46,10 +78,9 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
             if len(title) < 5:
                 continue
 
-            # Parse price
             price_text = price_el.get_text(strip=True) if price_el else "500"
-            price_match = re.search(r"[\d,]+", price_text.replace(",", ""))
-            price = float(price_match.group().replace(",", "")) if price_match else 500.0
+            digits = re.sub(r"[^\d]", "", price_text.split("-")[0])
+            price = float(digits) if digits else 500.0
 
             if price > max_price:
                 continue
@@ -60,7 +91,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
             image = ""
             if img_el:
-                image = img_el.get("data-src") or img_el.get("src", "")
+                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
 
             products.append({
                 "title": title,
@@ -70,7 +101,7 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
                 "images": [image] if image else [],
                 "rating": 4.2,
                 "orders": 0,
-                "item_id": link
+                "item_id": link,
             })
 
             if len(products) >= limit:
@@ -85,21 +116,13 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
 
 
 def check_availability(supplier_url: str) -> dict:
-    """
-    Check if a product is still available on IndiaMart.
-    Returns dict with 'available' bool and 'in_stock' bool.
-    """
     try:
-        response = requests.get(supplier_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Check for "out of stock" or removed page indicators
-        page_text = soup.get_text().lower()
+        session = get_session()
+        response = session.get(supplier_url, timeout=10)
+        page_text = response.text.lower()
         if "page not found" in page_text or "product not available" in page_text:
             return {"available": False, "in_stock": False}
-
         out_of_stock = "out of stock" in page_text or "not available" in page_text
         return {"available": True, "in_stock": not out_of_stock}
-
     except Exception:
         return {"available": False, "in_stock": False}
