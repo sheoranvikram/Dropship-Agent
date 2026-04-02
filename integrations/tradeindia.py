@@ -20,15 +20,9 @@ DIRECT_HEADERS = {
 
 
 def scrape_url(url: str, render: bool = False) -> requests.Response:
-    """
-    render=False → 1 credit (default)
-    render=True  → 10 credits (fallback only)
-    """
     params = {
         "api_key": SCRAPERAPI_KEY,
         "url": url,
-        "country_code": "in",
-        "device_type": "desktop",
     }
     if render:
         params["render"] = "true"
