@@ -14,16 +14,9 @@ SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
 
 def scrape_url(url: str, render: bool = False) -> requests.Response:
-    """
-    Fetch URL through ScraperAPI.
-    render=False  → 1 credit per request  (default)
-    render=True   → 10 credits per request (fallback only)
-    """
     params = {
         "api_key": SCRAPERAPI_KEY,
         "url": url,
-        "country_code": "in",
-        "device_type": "desktop",
     }
     if render:
         params["render"] = "true"
