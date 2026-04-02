@@ -1,150 +1,183 @@
 """
 integrations/meesho.py - Search home decor products on Meesho
-Uses ScraperAPI to handle JS rendering and anti-bot protection
+Uses Meesho's internal catalogue API directly — no ScraperAPI credits needed.
 """
 
 import requests
-from bs4 import BeautifulSoup
 import re
-import os
-import json
+import time
 
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
+# Meesho's internal search API (no auth required, mimics browser headers)
+MEESHO_API = "https://meesho.com/api/v1/products/search"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-IN,en;q=0.9",
+    "Referer": "https://www.meesho.com/",
+    "Origin": "https://www.meesho.com",
+    "x-meta-app": '{"appVersion":"5.0.0"}',
+}
 
 
-def scrape_url(url: str) -> requests.Response:
-    """Fetch any URL through ScraperAPI with JS rendering enabled."""
-    api_url = "http://api.scraperapi.com"
-    params = {
-        "api_key": SCRAPERAPI_KEY,
-        "url": url,
-        "render": "true",
-        "country_code": "in",
-        "device_type": "desktop",
+def _api_search(keyword: str, max_price: float, limit: int) -> list:
+    """
+    Hit Meesho's internal search API.
+    Returns parsed product list or empty list if it fails.
+    """
+    payload = {
+        "query": keyword,
+        "page": 1,
+        "pageSize": min(limit * 2, 40),
+        "filters": {},
+        "sortBy": "RELEVANCE",
     }
-    return requests.get(api_url, params=params, timeout=60)
-
-
-def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
-    """
-    Search Meesho for home decor products.
-    Returns list of raw product dicts.
-    """
-    url = f"https://www.meesho.com/search?q={keyword.replace(' ', '%20')}"
-
     try:
-        response = scrape_url(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Try Next.js embedded JSON data first
-        script_tags = soup.find_all("script", id="__NEXT_DATA__")
-        if script_tags:
-            try:
-                data = json.loads(script_tags[0].string)
-                props = data.get("props", {}).get("pageProps", {})
-                items = (
-                    props.get("catalogListingResult", {}).get("products", [])
-                    or props.get("searchResult", {}).get("products", [])
-                    or props.get("products", [])
-                )
-                products = []
-                for item in items[:limit]:
-                    price = float(
-                        item.get("price", {}).get("mrp", 0)
-                        or item.get("mrp", 0)
-                        or item.get("selling_price", 400)
-                        or 400
-                    )
-                    if price > max_price:
-                        continue
-                    images = item.get("images", [])
-                    image_urls = [
-                        img.get("url", "") or img.get("src", "")
-                        for img in (images if isinstance(images, list) else [])
-                        if isinstance(img, dict)
-                    ]
-                    rating_raw = item.get("rating", 4.0)
-                    rating = float(rating_raw.get("average", 4.0) if isinstance(rating_raw, dict) else rating_raw or 4.0)
-                    products.append({
-                        "title": item.get("name", item.get("title", "")),
-                        "supplier": "Meesho",
-                        "supplier_url": f"https://www.meesho.com/p/{item.get('slug', item.get('id', ''))}",
-                        "supplier_price": price,
-                        "images": image_urls[:3],
-                        "rating": rating,
-                        "orders": item.get("orders_count", 0),
-                        "item_id": str(item.get("id", "")),
-                    })
-                if products:
-                    print(f"    [Meesho] Found {len(products)} products for '{keyword}'")
-                    return products
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
-
-        # HTML fallback
-        products = []
-        cards = (
-            soup.find_all("div", attrs={"data-testid": re.compile(r"product", re.I)})
-            or soup.find_all("div", class_=re.compile(r"product.?card|product.?item", re.I))
-            or soup.find_all("div", class_=re.compile(r"product|card|item", re.I))
+        r = requests.post(
+            MEESHO_API,
+            json=payload,
+            headers=HEADERS,
+            timeout=20,
         )
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return []
 
-        for card in cards[:limit * 3]:
-            title_el = card.find(
-                ["h2", "h3", "p", "span"],
-                class_=re.compile(r"title|name|product.?name", re.I)
+    # Response shape: {"data": {"products": [...]}}
+    raw_items = (
+        data.get("data", {}).get("products", [])
+        or data.get("products", [])
+        or []
+    )
+
+    products = []
+    for item in raw_items:
+        try:
+            # Price lives under product_variants[0] or top-level
+            variants = item.get("product_variants", [{}])
+            price = float(
+                (variants[0].get("selling_price") if variants else None)
+                or item.get("selling_price")
+                or item.get("mrp")
+                or 400
             )
-            price_el = card.find(class_=re.compile(r"price|prc|cost|selling", re.I))
-            link_el = card.find("a", href=True)
-            img_el = card.find("img")
-
-            if not title_el:
-                continue
-            title = title_el.get_text(strip=True)
-            if len(title) < 5:
-                continue
-
-            price_text = price_el.get_text(strip=True) if price_el else "400"
-            digits = re.sub(r"[^\d]", "", price_text.split("-")[0])
-            price = float(digits) if digits else 400.0
-
             if price > max_price:
                 continue
 
-            link = link_el["href"] if link_el else ""
-            if link and not link.startswith("http"):
-                link = "https://www.meesho.com" + link
+            # Images
+            images_raw = item.get("images", []) or variants[0].get("images", []) if variants else []
+            images = []
+            for img in images_raw:
+                src = img.get("url") or img.get("src") or (img if isinstance(img, str) else "")
+                if src:
+                    images.append(src)
 
-            image = ""
-            if img_el:
-                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src", "")
+            rating_raw = item.get("rating")
+            rating = float(
+                rating_raw.get("average", 4.0) if isinstance(rating_raw, dict) else (rating_raw or 4.0)
+            )
 
+            slug = item.get("slug") or item.get("id") or ""
             products.append({
-                "title": title,
+                "title": item.get("name") or item.get("title") or "",
                 "supplier": "Meesho",
-                "supplier_url": link,
+                "supplier_url": f"https://www.meesho.com/p/{slug}",
                 "supplier_price": price,
-                "images": [image] if image else [],
-                "rating": 4.0,
-                "orders": 0,
-                "item_id": link,
+                "images": images[:3],
+                "rating": rating,
+                "orders": item.get("orders_count", 0),
+                "item_id": str(item.get("id", slug)),
             })
 
             if len(products) >= limit:
                 break
 
-        print(f"    [Meesho] Found {len(products)} products for '{keyword}'")
+        except (TypeError, KeyError, IndexError, ValueError):
+            continue
+
+    return products
+
+
+def _scrape_search(keyword: str, max_price: float, limit: int) -> list:
+    """
+    Fallback: scrape Meesho search page WITHOUT ScraperAPI.
+    Meesho injects __NEXT_DATA__ JSON into the page on server-side renders
+    for some search queries.
+    """
+    import json
+    from bs4 import BeautifulSoup
+
+    url = f"https://www.meesho.com/search?q={keyword.replace(' ', '%20')}"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        script = soup.find("script", id="__NEXT_DATA__")
+        if not script:
+            return []
+
+        data = json.loads(script.string)
+        props = data.get("props", {}).get("pageProps", {})
+        items = (
+            props.get("catalogListingResult", {}).get("products", [])
+            or props.get("searchResult", {}).get("products", [])
+            or props.get("products", [])
+        )
+
+        products = []
+        for item in items:
+            price = float(item.get("price", {}).get("mrp", 0) or item.get("mrp", 400) or 400)
+            if price > max_price:
+                continue
+            images_raw = item.get("images", [])
+            images = [
+                (img.get("url") or img.get("src") or "")
+                for img in images_raw if isinstance(img, dict)
+            ]
+            slug = item.get("slug") or item.get("id") or ""
+            products.append({
+                "title": item.get("name") or item.get("title") or "",
+                "supplier": "Meesho",
+                "supplier_url": f"https://www.meesho.com/p/{slug}",
+                "supplier_price": price,
+                "images": [i for i in images if i][:3],
+                "rating": 4.0,
+                "orders": item.get("orders_count", 0),
+                "item_id": str(item.get("id", slug)),
+            })
+            if len(products) >= limit:
+                break
         return products
 
-    except Exception as e:
-        print(f"    [Meesho] Error searching '{keyword}': {e}")
+    except Exception:
         return []
+
+
+def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> list:
+    time.sleep(2)
+
+    # Try internal API first (fastest, no credits used)
+    products = _api_search(keyword, max_price, limit)
+
+    # Fallback to page scrape
+    if not products:
+        time.sleep(2)
+        products = _scrape_search(keyword, max_price, limit)
+
+    # Filter out blank titles
+    products = [p for p in products if p.get("title") and len(p["title"]) >= 5]
+
+    print(f"    [Meesho] Found {len(products)} products for '{keyword}'")
+    return products
 
 
 def check_availability(supplier_url: str) -> dict:
     try:
-        response = scrape_url(supplier_url)
-        page_text = response.text.lower()
+        time.sleep(1)
+        r = requests.get(supplier_url, headers=HEADERS, timeout=20)
+        page_text = r.text.lower()
         if "page not found" in page_text or "404" in page_text:
             return {"available": False, "in_stock": False}
         out_of_stock = "out of stock" in page_text or "sold out" in page_text
