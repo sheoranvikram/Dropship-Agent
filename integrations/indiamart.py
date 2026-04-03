@@ -37,62 +37,60 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         products = []
-        seen_urls = set()
+        seen = set()
 
-        product_links = soup.find_all("a", href=re.compile(
-            r"(indiamart\.com/(proddetail|trade|catalog)|dir\.indiamart\.com/)", re.I
-        ))
+        # Dump all text to check what we're getting
+        all_text = soup.get_text()
+        if "sign in" in all_text.lower() and len(all_text) < 2000:
+            print(f"    [IndiaMart] Got login wall, skipping")
+            return []
 
-        for link_el in product_links:
-            href = link_el.get("href", "")
-            if not href or href in seen_urls:
+        # Try every <a> tag with a product-like URL
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if not re.search(r"indiamart\.com/(proddetail|trade|catalog|search)", href, re.I):
                 continue
-            if not href.startswith("http"):
-                href = "https://www.indiamart.com" + href
-            seen_urls.add(href)
+            if href in seen:
+                continue
+            seen.add(href)
 
-            container = link_el
-            for _ in range(6):
-                if container.parent:
-                    container = container.parent
+            # Walk up to find a container with price and title
+            node = a
+            for _ in range(8):
+                text = node.get_text(" ", strip=True)
+                price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([\d,]+)", text)
+                title_candidates = [
+                    el.get_text(strip=True)
+                    for el in node.find_all(["h2","h3","h4","h5","b","strong"])
+                    if len(el.get_text(strip=True)) > 8
+                ]
+                if price_match and title_candidates:
+                    price = float(price_match.group(1).replace(",", ""))
+                    if price > max_price:
+                        break
+                    title = title_candidates[0]
+                    img = node.find("img")
+                    image = ""
+                    if img:
+                        image = img.get("data-src") or img.get("data-original") or img.get("src","")
+                        if image.startswith("data:"):
+                            image = ""
+                    products.append({
+                        "title": title[:150],
+                        "supplier": "IndiaMart",
+                        "supplier_url": href,
+                        "supplier_price": price,
+                        "images": [image] if image else [],
+                        "rating": 4.2,
+                        "orders": 0,
+                        "item_id": href,
+                    })
+                    break
+                if node.parent:
+                    node = node.parent
                 else:
                     break
 
-            title = ""
-            for tag in ["h2", "h3", "h4", "h5"]:
-                el = container.find(tag)
-                if el:
-                    title = el.get_text(strip=True)
-                    break
-            if not title:
-                title = link_el.get_text(strip=True)
-            if not title or len(title) < 5:
-                continue
-
-            price = 500.0
-            price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([\d,]+)", container.get_text())
-            if price_match:
-                price = float(price_match.group(1).replace(",", ""))
-            if price > max_price:
-                continue
-
-            image = ""
-            img_el = container.find("img")
-            if img_el:
-                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("data-lazy-src") or img_el.get("src", "")
-                if image.startswith("data:"):
-                    image = ""
-
-            products.append({
-                "title": title[:150],
-                "supplier": "IndiaMart",
-                "supplier_url": href,
-                "supplier_price": price,
-                "images": [image] if image else [],
-                "rating": 4.2,
-                "orders": 0,
-                "item_id": href,
-            })
             if len(products) >= limit:
                 break
 
@@ -101,7 +99,6 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
     except Exception as e:
         print(f"    [IndiaMart] Error searching '{keyword}': {e}")
         return []
-
 def check_availability(supplier_url: str) -> dict:
     try:
         r = requests.get(supplier_url, headers=HEADERS, timeout=20)
