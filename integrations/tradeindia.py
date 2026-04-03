@@ -33,57 +33,17 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response = scrape_url(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        products = []
 
-        # TradeIndia product cards are usually <div class="product-info"> or similar
-        # Try multiple selectors broadly
-        cards = soup.find_all("div", class_=True)
-        seen_titles = set()
+        print(f"    [TradeIndia DEBUG] Status: {response.status_code}, HTML length: {len(response.text)}")
+        print(f"    [TradeIndia DEBUG] Page text preview: {soup.get_text()[:300].strip()}")
+        all_classes = set()
+        for tag in soup.find_all(class_=True):
+            for c in tag.get("class", []):
+                all_classes.add(c)
+        print(f"    [TradeIndia DEBUG] Classes found: {list(all_classes)[:30]}")
 
-        for card in cards:
-            classes = " ".join(card.get("class", []))
-            if not re.search(r"product|listing|item|card|result", classes, re.I):
-                continue
-
-            title_el = card.find(["h2","h3","h4","a"], string=re.compile(r".{8,}"))
-            if not title_el:
-                continue
-            title = title_el.get_text(strip=True)
-            if len(title) < 8 or title in seen_titles:
-                continue
-            seen_titles.add(title)
-
-            text = card.get_text(" ", strip=True)
-            price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([\d,]+)", text)
-            price = float(price_match.group(1).replace(",","")) if price_match else 600.0
-            if price > max_price:
-                continue
-
-            link_el = card.find("a", href=True)
-            link = link_el["href"] if link_el else ""
-            if link and not link.startswith("http"):
-                link = "https://www.tradeindia.com" + link
-
-            img_el = card.find("img")
-            image = ""
-            if img_el:
-                image = img_el.get("data-src") or img_el.get("data-original") or img_el.get("src","")
-
-            products.append({
-                "title": title,
-                "supplier": "TradeIndia",
-                "supplier_url": link,
-                "supplier_price": price,
-                "images": [image] if image else [],
-                "rating": 4.1,
-                "orders": 0,
-                "item_id": link,
-            })
-            if len(products) >= limit:
-                break
-
-        print(f"    [TradeIndia] Found {len(products)} products for '{keyword}'")
-        return products
+        print(f"    [TradeIndia] Found 0 products for '{keyword}'")
+        return []
     except Exception as e:
         print(f"    [TradeIndia] Error searching '{keyword}': {e}")
         return []
