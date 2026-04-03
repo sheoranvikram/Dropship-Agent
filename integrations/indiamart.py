@@ -36,66 +36,18 @@ def search_products(keyword: str, max_price: float = 2000, limit: int = 10) -> l
         response = scrape_url(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        products = []
-        seen = set()
-
-        # Dump all text to check what we're getting
-        all_text = soup.get_text()
-        if "sign in" in all_text.lower() and len(all_text) < 2000:
-            print(f"    [IndiaMart] Got login wall, skipping")
-            return []
-
-        # Try every <a> tag with a product-like URL
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not re.search(r"indiamart\.com/(proddetail|trade|catalog|search)", href, re.I):
-                continue
-            if href in seen:
-                continue
-            seen.add(href)
-
-            # Walk up to find a container with price and title
-            node = a
-            for _ in range(8):
-                text = node.get_text(" ", strip=True)
-                price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([\d,]+)", text)
-                title_candidates = [
-                    el.get_text(strip=True)
-                    for el in node.find_all(["h2","h3","h4","h5","b","strong"])
-                    if len(el.get_text(strip=True)) > 8
-                ]
-                if price_match and title_candidates:
-                    price = float(price_match.group(1).replace(",", ""))
-                    if price > max_price:
-                        break
-                    title = title_candidates[0]
-                    img = node.find("img")
-                    image = ""
-                    if img:
-                        image = img.get("data-src") or img.get("data-original") or img.get("src","")
-                        if image.startswith("data:"):
-                            image = ""
-                    products.append({
-                        "title": title[:150],
-                        "supplier": "IndiaMart",
-                        "supplier_url": href,
-                        "supplier_price": price,
-                        "images": [image] if image else [],
-                        "rating": 4.2,
-                        "orders": 0,
-                        "item_id": href,
-                    })
-                    break
-                if node.parent:
-                    node = node.parent
-                else:
-                    break
-
-            if len(products) >= limit:
-                break
-
-        print(f"    [IndiaMart] Found {len(products)} products for '{keyword}'")
-        return products
+        
+        # DEBUG - print first 500 chars of text and all unique class names
+        print(f"    [IndiaMart DEBUG] Status: {response.status_code}, HTML length: {len(response.text)}")
+        print(f"    [IndiaMart DEBUG] Page text preview: {soup.get_text()[:300].strip()}")
+        all_classes = set()
+        for tag in soup.find_all(class_=True):
+            for c in tag.get("class", []):
+                all_classes.add(c)
+        print(f"    [IndiaMart DEBUG] Classes found: {list(all_classes)[:30]}")
+        
+        print(f"    [IndiaMart] Found 0 products for '{keyword}'")
+        return []
     except Exception as e:
         print(f"    [IndiaMart] Error searching '{keyword}': {e}")
         return []
