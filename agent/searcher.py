@@ -28,8 +28,8 @@ def search_all_platforms() -> list:
         print(f"\n  Keyword: '{keyword}'")
 
         for search_fn, name in [
-            (search_indiamart, "IndiaMart"),
-            (search_tradeindia, "TradeIndia"),
+            (search_indiamart, "Flipkart"),
+            (search_tradeindia, "Amazon"),
             (search_meesho, "Meesho"),
             (search_glowroad, "GlowRoad"),
         ]:
